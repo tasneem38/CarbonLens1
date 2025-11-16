@@ -4,14 +4,16 @@ import yaml
 from typing import List, Dict
 import requests
 import json
+from dotenv import load_dotenv
+load_dotenv()
 
-# Configure Gemini - USE ENVIRONMENT VARIABLE, NOT HARCODED
-GEMINI_API_KEY = "AIzaSyDnXb5JT1ByWvkUhDYnxgmPAZ3OpvQCKjc" # Remove hardcoded key!
+# Get API key from environment variable
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
+# Configure Gemini
 if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        # Test the connection
         model = genai.GenerativeModel('gemini-pro')
         test_response = model.generate_content("Hello")
         print("✅ Gemini AI configured successfully and working!")
@@ -20,7 +22,7 @@ if GEMINI_API_KEY:
         print(f"❌ Gemini AI configuration failed: {e}")
         AI_ENABLED = False
 else:
-    print("⚠️ GEMINI_API_KEY not found in environment variables")
+    print("⚠️ GEMINI_API_KEY not found in .env file")
     AI_ENABLED = False
 
 def generate_ai_recommendations(inputs: dict) -> List[Dict]:

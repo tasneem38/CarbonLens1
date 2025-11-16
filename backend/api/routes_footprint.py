@@ -20,6 +20,8 @@ def compute_footprint(payload: LifestyleInput, db: Session = Depends(get_db)):
     score = score_from_total(totals["total"])
     trend = forecast_series(totals["total"])
 
+# backend/api/routes_footprint.py
+
     run = models.FootprintRun(
         user_id=None,
         inputs=payload.model_dump(),
@@ -27,22 +29,18 @@ def compute_footprint(payload: LifestyleInput, db: Session = Depends(get_db)):
         energy_kg=totals["energy"],
         travel_kg=totals["travel"],
         food_kg=totals["food"],
+        goods_kg=totals.get("goods", 0),   # ← FIXED
         score=score
     )
     db.add(run)
 
-    # 🔥 Add leaderboard entry with random anonymous ID
+    # Leaderboard entry
     anon_id = random.randint(1000, 9999)
-    entry = Leaderboard(user_name=f"Anonymous #{anon_id}", score=score)
+    entry = Leaderboard(
+        user_id=None,                     # ← FIXED
+        user_name=f"Anonymous #{anon_id}",
+        score=score
+    )
     db.add(entry)
 
     db.commit()
-    db.refresh(run)
-
-    return FootprintResult(
-        inputs=payload,
-        totals=FootprintTotals(**totals),
-        score=score,
-        trend=[TrendPoint(**p) for p in trend],
-        recommendations=[]
-    )
