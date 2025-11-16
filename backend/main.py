@@ -1,34 +1,41 @@
+# backend/main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from backend.core.config import settings
-from backend.api.routes_users import router as users_router
-from backend.api.routes_footprint import router as footprint_router
-from backend.api.routes_reco import router as reco_router
-from backend.api.routes_leaderboard import router as leaderboard_router
-from backend.api.routes_reco import router as reco_router
-from dotenv import load_dotenv
-import os
 
-# Load environment variables
-load_dotenv()
-app = FastAPI(title="CarbonLens API", version="0.1.0")
+# Routers
+from backend.api import routes_leaderboard
+from backend.api import routes_footprint     # ✅ ADD THIS LINE
 
-origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
+from backend.db.session import engine
+from backend.db import models
+
+
+app = FastAPI(title="CarbonLens API")
+
+# Allow frontend in dev
+origins = [
+    "http://localhost",
+    "http://localhost:8501",
+    "http://127.0.0.1",
+    "http://127.0.0.1:8501"
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins or ["*"],
+    allow_origins=origins + ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.include_router(reco_router, prefix=settings.API_PREFIX)
-app.include_router(leaderboard_router, prefix=settings.API_PREFIX)
-app.include_router(users_router, prefix="/api")
-app.include_router(footprint_router, prefix="/api")
-app.include_router(reco_router, prefix="/api")
-app.include_router(leaderboard_router, prefix="/api")
+# Include routers
+app.include_router(routes_footprint.router)   # ✅ MUST be first so Analyzer works
+app.include_router(routes_leaderboard.router) # leaderboard
 
-@app.get("/api/health")
-def health():
-    return {"status": "ok", "demo_mode": settings.DEMO_MODE}
+
+@app.on_event("startup")
+def on_startup():
+    try:
+        models.Base.metadata.create_all(bind=engine)
+    except Exception as e:
+        print("DB init error:", e)

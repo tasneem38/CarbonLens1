@@ -1,13 +1,19 @@
+# backend/db/session.py
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.orm import sessionmaker, scoped_session
+import os
 
-# Use SQLite instead of Postgres
-DATABASE_URL = "sqlite:///./carbonlens.db"
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./carbonlens.db")  # override in prod
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-Base = declarative_base()
+# For SQLite use check_same_thread=False, for other DBs normal engine string
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+)
 
+SessionLocal = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
+
+# NOTE: import Base from backend.db.models where Base = declarative_base()
 def get_db():
     db = SessionLocal()
     try:

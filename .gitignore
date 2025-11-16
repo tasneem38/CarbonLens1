@@ -11,4 +11,6 @@ __pycache__/
 *.log
 .DS_Store
 Thumbs.db
-.env.env 
+.env
+*.env
+
