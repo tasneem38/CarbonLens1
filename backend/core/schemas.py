@@ -11,6 +11,7 @@ class LifestyleInput(BaseModel):
     foodEmissions: float = 0
     goodsEmissions: float = 0
 
+
 # ----------------- Footprint Response -----------------
 class FootprintTotals(BaseModel):
     total: float
@@ -19,9 +20,11 @@ class FootprintTotals(BaseModel):
     food: float
     goods: float = 0
 
+
 class TrendPoint(BaseModel):
     x: str
     y: float
+
 
 class FootprintResult(BaseModel):
     inputs: LifestyleInput
@@ -30,13 +33,26 @@ class FootprintResult(BaseModel):
     trend: List[TrendPoint]
     recommendations: List[Dict] = []
 
-# ----------------- AI Tips -----------------
-class TipsResponse(BaseModel):
-    tips: List[Dict]
 
-# -------- Optional: Keep only if using users --------
+# ----------------- AI Tips -----------------
+class AITip(BaseModel):
+    id: Optional[str] = None
+    title: Optional[str] = None
+    text: Optional[str] = None
+    impact_kg_month: Optional[float] = None
+    confidence: Optional[float] = None
+    category: Optional[str] = None
+    steps: Optional[List[str]] = None
+
+
+class TipsResponse(BaseModel):
+    tips: List[Dict]  # using Dict to allow flexible AI output
+
+
+# ----------------- Optional: User Models -----------------
 class UserCreate(BaseModel):
     email: str
+
 
 class UserOut(BaseModel):
     id: int

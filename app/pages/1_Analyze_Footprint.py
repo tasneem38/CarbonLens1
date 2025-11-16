@@ -270,7 +270,7 @@ body {
 st.markdown('<div class="page-title">🌍 Carbon Footprint Analyzer</div>', unsafe_allow_html=True)
 st.markdown('<div class="subtitle">Understand your environmental impact and discover personalized ways to reduce it</div>', unsafe_allow_html=True)
 
-API = "http://localhost:8000/api"
+API = "http://localhost:8080"
 
 # ✅ IMPROVED LOCAL COMPUTATION WITH PROPER SCORING
 def improved_local_compute(form_values):
@@ -921,16 +921,23 @@ if not st.session_state.get('show_questionnaire', False):
 if st.session_state.get('run_computation', False) and 'form_values' in locals() and form_values:
     with st.spinner('🔄 Analyzing your carbon footprint...'):
         try:
-            # Prepare payload matching backend LifestyleInput schema
             payload = {
-                "electricityKwh": form_values.get('electricityKwh', 0),
-                "naturalGasTherms": form_values.get('naturalGasTherms', 0),
-                "carKm": form_values.get('carKm', 0),
-                "busKm": form_values.get('busKm', 0),
-                "diet": "mixed",
-                "foodEmissions": form_values.get('foodEmissions', 3.5),
-                "goodsEmissions": form_values.get('goodsEmissions', 0)
-            }
+    "electricityKwh": form_values.get('electricityKwh', 0),
+    "naturalGasTherms": form_values.get('naturalGasTherms', 0),
+    "carKm": form_values.get('carKm', 0),
+    "busKm": form_values.get('busKm', 0),
+
+    # REQUIRED by backend compute()
+    "diet": "mixed",
+    "foodEmissions": form_values.get('foodEmissions', 3.5),
+    "goodsEmissions": form_values.get('goodsEmissions', 0),
+
+    # Optional but improves accuracy
+    "flights_per_year": form_values.get("flights_per_year", 0),
+    "housing_type": form_values.get("housing_type", "Apartment"),
+    "residents": form_values.get("residents", 2)
+}
+
             
             # Call your backend API
             r = requests.post(f"{API}/footprint/compute", json=payload, timeout=10)

@@ -1,238 +1,285 @@
-import os
-import google.generativeai as genai
-import yaml
-from typing import List, Dict
-import requests
 import json
+import re
+import os
+from groq import Groq
 from dotenv import load_dotenv
+
 load_dotenv()
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 
-# Get API key from environment variable
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Configure Gemini
-if GEMINI_API_KEY:
+# -----------------------------
+# FALLBACK Recommendations
+# -----------------------------
+def fallback_recs(totals, highest, profile):
+    return [
+        {
+            "title": "Improve home energy efficiency",
+            "text": (
+                f"Your energy emissions are {totals.get('energy',0)} kg/month. "
+                "Start with simple high-impact fixes like sealing drafts, reducing AC load, "
+                "and switching to LED lighting."
+            ),
+            "impact_kg_month": max(5, int(totals.get("energy", 0) * 0.10)),
+            "confidence": 0.85,
+            "steps": [
+                "Seal gaps around doors/windows using weather strips.",
+                "Replace 5–10 bulbs with LEDs.",
+                "Increase AC temperature by 1–2°C."
+            ],
+            "category": "Energy"
+        },
+        {
+            "title": "Reduce short car trips",
+            "text": (
+                f"Travel emissions are {totals.get('travel',0)} kg/month. "
+                "Short trips waste the most fuel — combining errands helps reduce this."
+            ),
+            "impact_kg_month": max(3, int(totals.get("travel", 0) * 0.15)),
+            "confidence": 0.75,
+            "steps": [
+                "List all weekly short trips.",
+                "Group 2–3 trips into a single outing.",
+                "Try public transport at least once per week."
+            ],
+            "category": "Travel"
+        },
+        {
+            "title": "Lower food-based emissions",
+            "text": (
+                f"Food-related CO₂ is {totals.get('food',0)} kg/month. "
+                "Reducing high-emission meals (red meat, dairy-heavy dishes) makes a big difference."
+            ),
+            "impact_kg_month": max(4, int(totals.get("food", 0) * 0.12)),
+            "confidence": 0.80,
+            "steps": [
+                "Replace 2 red-meat meals with plant-based options.",
+                "Try legume-based proteins like chickpeas or lentils.",
+                "Shift 1–2 weekly meals to vegetarian."
+            ],
+            "category": "Food"
+        }
+    ]
+
+
+# -----------------------------
+# Extract JSON from model text
+# -----------------------------
+def _extract_json_from_text(text: str):
+    if not text:
+        return None
+    text = text.strip()
+
+    # Try direct parse
     try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-pro')
-        test_response = model.generate_content("Hello")
-        print("✅ Gemini AI configured successfully and working!")
-        AI_ENABLED = True
-    except Exception as e:
-        print(f"❌ Gemini AI configuration failed: {e}")
-        AI_ENABLED = False
-else:
-    print("⚠️ GEMINI_API_KEY not found in .env file")
-    AI_ENABLED = False
+        return json.loads(text)
+    except:
+        pass
 
-def generate_ai_recommendations(inputs: dict) -> List[Dict]:
-    """Generate AI-powered recommendations using Gemini"""
-    
-    if not AI_ENABLED:
-        print("🔄 Using fallback recommendations (AI not enabled)")
-        return generate_fallback_recommendations(inputs)
-    
-    try:
-        # Prepare comprehensive context for AI
-        total_emissions = inputs.get('energy_kg', 0) + inputs.get('travel_kg', 0) + inputs.get('food_kg', 0)
-        
-        context = f"""You are an expert carbon footprint advisor. Generate personalized carbon reduction recommendations based on this user data:
-
-USER FOOTPRINT DATA (USE THESE EXACT NUMBERS):
-- Total monthly emissions: {total_emissions} kg CO₂
-- Energy: {inputs.get('energy_kg', 0)} kg CO₂ ({inputs.get('electricityKwh', 0)} kWh electricity, {inputs.get('naturalGasTherms', 0)} therms gas)
-- Travel: {inputs.get('travel_kg', 0)} kg CO₂ ({inputs.get('carKm', 0)} km car, {inputs.get('busKm', 0)} km bus)
-- Food: {inputs.get('food_kg', 0)} kg CO₂ (diet: {inputs.get('diet', 'mixed')})
-- Goods: {inputs.get('goods_kg', 0)} kg CO₂
-
-Generate 3-5 specific, actionable recommendations. For each, provide:
-- Area (Energy, Travel, Food, Shopping, General)
-- Specific actionable advice
-- Realistic monthly CO₂ reduction estimate
-- Confidence score (0.7-0.95)
-
-Return ONLY valid JSON in this exact format:
-[
-  {{
-    "area": "Energy",
-    "text": "Specific advice here based on their {inputs.get('electricityKwh', 0)} kWh usage",
-    "impact_kg_month": 25,
-    "confidence": 0.85
-  }}
-]
-
-Make recommendations highly specific to their actual numbers above."""
-
-        model = genai.GenerativeModel('gemini-pro')
-        response = model.generate_content(context)
-        
-        print(f"🔍 Raw AI response received")
-        
-        # Parse the JSON response
+    # Try ```json fenced block
+    m = re.search(r"```json\s*(\{.*?\}|\[.*?\])\s*```", text, re.DOTALL)
+    if m:
         try:
-            response_text = response.text.strip()
-            print(f"AI Response: {response_text}")
-            
-            # Clean the response
-            if '```json' in response_text:
-                response_text = response_text.split('```json')[1].split('```')[0].strip()
-            elif '```' in response_text:
-                response_text = response_text.split('```')[1].split('```')[0].strip()
-            
-            tips = json.loads(response_text)
-            
-            # Validate structure
-            if isinstance(tips, list) and len(tips) > 0:
-                validated_tips = []
-                for tip in tips:
-                    if all(key in tip for key in ['area', 'text', 'impact_kg_month', 'confidence']):
-                        validated_tips.append(tip)
-                
-                if validated_tips:
-                    print(f"✅ AI generated {len(validated_tips)} recommendations")
-                    return validated_tips
-                else:
-                    raise ValueError("No valid tips in response")
-            else:
-                raise ValueError("Invalid response format")
-                
-        except (json.JSONDecodeError, ValueError) as e:
-            print(f"❌ AI response parsing failed: {e}")
-            return generate_fallback_recommendations(inputs)
-        
-    except Exception as e:
-        print(f"❌ AI recommendation error: {e}")
-        return generate_fallback_recommendations(inputs)
+            return json.loads(m.group(1))
+        except:
+            pass
 
-def generate_ai_chat_response(user_question: str, inputs: dict) -> str:
-    """Generate AI response for chat interface using Gemini"""
-    
-    if not AI_ENABLED:
-        print("🔄 Using fallback chat response (AI not enabled)")
-        return generate_fallback_chat_response(user_question, inputs)
-    
-    try:
-        total_emissions = inputs.get('energy_kg', 0) + inputs.get('travel_kg', 0) + inputs.get('food_kg', 0)
-        
-        context = f"""You are a helpful Carbon Coach AI. Answer the user's question based on their actual carbon footprint data:
+    # Try to extract first list/object
+    m2 = re.search(r"(\[.*\]|\{.*\})", text, re.DOTALL)
+    if m2:
+        try:
+            return json.loads(m2.group(1))
+        except:
+            pass
 
-USER'S ACTUAL DATA (USE THESE EXACT NUMBERS):
-- Total: {total_emissions} kg CO₂/month
-- Energy: {inputs.get('energy_kg', 0)} kg CO₂ ({inputs.get('electricityKwh', 0)} kWh electricity)
-- Travel: {inputs.get('travel_kg', 0)} kg CO₂ ({inputs.get('carKm', 0)} km car, {inputs.get('busKm', 0)} km bus)
-- Food: {inputs.get('food_kg', 0)} kg CO₂ (diet: {inputs.get('diet', 'mixed')})
+    return None
 
-USER QUESTION: "{user_question}"
 
-IMPORTANT: 
-- Use the exact numbers provided above
-- Be specific and actionable
-- Provide realistic estimates
-- Ask a follow-up question to continue conversation
-- Keep response conversational but informative
-- Focus on solutions, not just problems"""
-
-        model = genai.GenerativeModel('gemini-pro')
-        response = model.generate_content(context)
-        
-        ai_response = response.text.strip()
-        print(f"✅ AI Chat response: {ai_response}")
-        return ai_response
-        
-    except Exception as e:
-        print(f"❌ AI chat error: {e}")
-        return generate_fallback_chat_response(user_question, inputs)
-
-def generate_fallback_recommendations(inputs: dict) -> List[Dict]:
-    """Generate rule-based recommendations when AI fails"""
-    electricity = inputs.get("electricityKwh", 0)
-    car_km = inputs.get("carKm", 0)
-    diet = inputs.get("diet", "mixed")
-    food_emissions = inputs.get("foodEmissions", 3.5)
-    goods_emissions = inputs.get("goodsEmissions", 0)
-    
-    tips = []
-    
-    # Energy recommendations
-    if electricity > 250:
-        tips.append({
-            "area": "Energy",
-            "text": "Install a smart thermostat to optimize heating and cooling schedules",
-            "impact_kg_month": round(electricity * 0.82 * 0.12),
-            "confidence": 0.85
-        })
-    
-    # Travel recommendations
-    if car_km > 200:
-        tips.append({
-            "area": "Travel",
-            "text": "Use public transport or carpool for 30% of your current car trips",
-            "impact_kg_month": round(car_km * 0.3 * (0.21 - 0.09)),
-            "confidence": 0.8
-        })
-    
-    # Food recommendations
-    if diet == "nonveg" or food_emissions > 3.0:
-        tips.append({
-            "area": "Food",
-            "text": "Replace two red meat meals per week with plant-based alternatives",
-            "impact_kg_month": 25,
-            "confidence": 0.75
-        })
-    
-    # Shopping recommendations
-    if goods_emissions > 150:
-        tips.append({
-            "area": "Shopping",
-            "text": "Choose products with minimal packaging and support sustainable brands",
-            "impact_kg_month": round(goods_emissions * 0.15),
-            "confidence": 0.7
-        })
-    
-    # Ensure minimum 3 recommendations
-    while len(tips) < 3:
-        tips.append({
-            "area": "General",
-            "text": "Conduct a home energy audit to identify hidden energy drains",
-            "impact_kg_month": 15,
-            "confidence": 0.8
-        })
-    
-    return tips[:5]
-
-def generate_fallback_chat_response(question: str, inputs: dict) -> str:
-    """Generate fallback chat responses"""
-    question_lower = question.lower()
+# -----------------------------
+# Main Recommendation Generator
+# -----------------------------
+def generate_tips(payload):
     totals = {
-        'energy': inputs.get('energy_kg', 0),
-        'travel': inputs.get('travel_kg', 0),
-        'food': inputs.get('food_kg', 0)
+        "total": payload.get("total") or payload.get("total_kg") or 0,
+        "energy": payload.get("energy") or payload.get("energy_kg") or 0,
+        "travel": payload.get("travel") or payload.get("travel_kg") or 0,
+        "food": payload.get("food") or payload.get("food_kg") or 0,
+        "goods": payload.get("goods") or payload.get("goods_kg") or 0,
     }
-    total_emissions = totals['energy'] + totals['travel'] + totals['food']
-    
-    if any(word in question_lower for word in ["energy", "electric", "power", "ac", "heating"]):
-        return f"""Based on your energy usage of {totals['energy']} kg CO₂/month, I recommend focusing on efficiency upgrades like smart thermostats, LED lighting, and eliminating phantom loads. These could save you ~{round(totals['energy'] * 0.15)} kg CO₂ monthly. What specific energy concerns do you have?"""
-    
-    elif any(word in question_lower for word in ["travel", "car", "bus", "commute"]):
-        return f"""For your travel emissions of {totals['travel']} kg CO₂/month, consider public transport, carpooling, or active transportation. Small changes could reduce this by ~{round(totals['travel'] * 0.2)} kg monthly. What's your current commute like?"""
-    
-    elif any(word in question_lower for word in ["food", "diet", "eat", "meal", "vegetarian"]):
-        return f"""Regarding your food emissions of {totals['food']} kg CO₂/month, consider reducing meat consumption, choosing local produce, and minimizing food waste. This could save ~{round(totals['food'] * 0.15)} kg monthly. Any specific dietary questions?"""
-    
-    elif any(word in question_lower for word in ["big", "largest", "main", "primary", "major", "source"]):
-        main_source = max(totals, key=totals.get)
-        source_percentage = round((totals[main_source] / total_emissions) * 100)
-        return f"""Your biggest emission source is {main_source} at {totals[main_source]} kg CO₂/month ({source_percentage}% of total). This is your best opportunity for reduction! Want specific {main_source} reduction tips?"""
-    
-    else:
-        return f"""I'd be happy to help you reduce your carbon footprint of {total_emissions} kg CO₂/month! Your main opportunities are in energy efficiency ({totals['energy']} kg), sustainable transportation ({totals['travel']} kg), and diet optimization ({totals['food']} kg). What specific area interests you?"""
 
-def generate_tips(inputs: dict):
-    """Main function to generate recommendations"""
-    return generate_ai_recommendations(inputs)
+    profile = payload.get("profile", "your lifestyle")
 
-def generate_chat_response(payload: dict) -> str:
-    """Generate AI response for chat interface"""
-    user_question = payload.get("user_question", "")
-    inputs = payload
-    return generate_ai_chat_response(user_question, inputs)
+    highest = max(
+        [
+            ("energy", totals["energy"]),
+            ("travel", totals["travel"]),
+            ("food", totals["food"]),
+            ("goods", totals["goods"])
+        ],
+        key=lambda x: x[1]
+    )[0]
+
+    # -----------------------------
+    # Better / friendlier system prompt
+    # -----------------------------
+    system_prompt = f"""
+You are an expert carbon footprint coach who writes warm, motivating,
+and highly actionable recommendations.
+
+STRICT RULES:
+- Use ONLY the values given below (do NOT guess).
+- Provide **4–6 recommendations**.
+- Each recommendation MUST contain:
+  - title
+  - text (2–3 sentence explanation)
+  - impact_kg_month (INTEGER)
+  - confidence (0–1)
+  - steps (3–5 short bullet points)
+  - category (Energy, Travel, Food, Goods)
+- Add brief citations like: (Analyzer: 50 kg energy)
+- Give advice suitable for an Indian urban user unless stated otherwise.
+- Keep tone friendly, helpful, and specific.
+
+User Profile: {profile}
+
+CO₂ Analyzer Values:
+Total: {totals['total']} kg/month
+Energy: {totals['energy']} kg
+Travel: {totals['travel']} kg
+Food: {totals['food']} kg
+Goods: {totals['goods']} kg
+
+Highest-impact area: {highest}
+"""
+
+    user_prompt = """
+Return **ONLY a JSON list**, no intro text.
+"""
+
+    # -----------------------------
+    # Call Groq LLM
+    # -----------------------------
+    try:
+        resp = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.25,
+            max_tokens=900,
+        )
+        raw = resp.choices[0].message.content
+
+    except Exception as e:
+        print("ERROR contacting Groq:", e)
+        return fallback_recs(totals, highest, profile)
+
+    print("=== RAW LLM OUTPUT START ===")
+    print(raw)
+    print("=== RAW LLM OUTPUT END ===")
+
+    parsed = _extract_json_from_text(raw)
+
+    if not parsed or not isinstance(parsed, list):
+        print("LLM returned NO valid JSON → fallback.")
+        return fallback_recs(totals, highest, profile)
+
+    recommendations = []
+    for i, item in enumerate(parsed):
+        if not isinstance(item, dict):
+            continue
+
+        recommendations.append({
+            "title": item.get("title", f"Recommendation {i+1}"),
+            "text": item.get("text", ""),
+            "impact_kg_month": int(item.get("impact_kg_month") or 0),
+            "confidence": float(item.get("confidence") or 0.7),
+            "steps": item.get("steps") if isinstance(item.get("steps"), list) else [],
+            "category": item.get("category", "General")
+        })
+
+    if not recommendations:
+        return fallback_recs(totals, highest, profile)
+
+    return recommendations
+
+# ---------------------------------------------------
+# Chat Assistant (Groq)
+# ---------------------------------------------------
+def generate_chat_response(payload):
+    """Generate a higher-quality, memory-aware response using Groq."""
+
+    question = payload.get("user_question", "")
+    history = payload.get("chat_history", [])
+    totals = payload.get("totals", {})
+
+    total = totals.get("total", 0)
+    energy = totals.get("energy", 0)
+    travel = totals.get("travel", 0)
+    food = totals.get("food", 0)
+    goods = totals.get("goods", 0)
+
+    profile = payload.get("profile", "your lifestyle")
+
+    # Determine highest-impact category
+    highest = max(
+        [("energy", energy), ("travel", travel), ("food", food), ("goods", goods)],
+        key=lambda x: x[1]
+    )[0]
+
+    # Improved system message
+    system_prompt = f"""
+You are a friendly, highly accurate carbon footprint coach.
+
+RULES YOU MUST FOLLOW:
+- Use ONLY the values provided below — NEVER guess.
+- Give guidance in a warm, encouraging tone.
+- When explaining numbers, cite them like this: “(Analyzer: 50 kg energy)”
+- Provide 1–2 specific next steps when helpful.
+- Keep responses concise but helpful.
+- Maintain conversational memory.
+
+User Profile: {profile}
+
+CO2 VALUES — DO NOT ALTER:
+Total: {total} kg/month
+Energy: {energy} kg
+Travel: {travel} kg
+Food: {food} kg
+Goods: {goods} kg
+
+Highest-impact category: {highest}
+"""
+
+    # Convert chat_history → proper LLM message format
+    formatted_history = []
+    for msg in history:
+        if msg["role"] == "user":
+            formatted_history.append({"role": "user", "content": msg["content"]})
+        else:
+            formatted_history.append({"role": "assistant", "content": msg["content"]})
+
+    # Include conversation memory + new question
+    messages = [
+        {"role": "system", "content": system_prompt},
+        *formatted_history,
+        {"role": "user", "content": question}
+    ]
+
+    try:
+        resp = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=messages,
+            temperature=0.25,
+            max_tokens=350
+        )
+
+        # Groq returns ChatCompletionMessage object, not dict
+        content = resp.choices[0].message.content
+        return content
+
+    except Exception as e:
+        print("CHAT MODEL ERROR:", e)
+        return f"AI unavailable — based on your analyzer, your highest-impact area is **{highest}**."

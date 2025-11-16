@@ -41,13 +41,7 @@ class FootprintRun(Base):
 # ------------------------
 class Leaderboard(Base):
     __tablename__ = "leaderboard"
-
     id = mapped_column(Integer, primary_key=True, index=True)
-
-    # REQUIRED (your routes access r.user_id)
-    user_id = mapped_column(Integer, nullable=True)
-
     user_name = mapped_column(String, default="Anonymous")
     score = mapped_column(Float, nullable=False)
-
     created_at = mapped_column(DateTime, default=func.now())

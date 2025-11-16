@@ -1,15 +1,11 @@
 # app/pages/2_AI_Recommendations.py
 """
-AI Recommendations — upgraded full page.
+AI Recommendations — upgraded full page (Groq: llama-3.1-70b)
 
-Features:
-- Uses Analyzer result in st.session_state['last_result']
-- Calls local backend functions if available, else tries /reco/generate endpoints
-- 2-column grid layout (desktop), 1-column on narrow screens
-- Glowing outlined cards similar to Analyzer profile cards
-- Confidence badge, category color badges
-- Collapsible details & implementation checkbox (unique keys)
-- Fallback steps generator if AI doesn't provide steps
+Notes:
+- Calls local backend functions if available (fast path) else tries /reco/generate endpoints
+- Expects backend to be Groq-based (LLAMA-3.1-70B) as implemented in backend/services/recommender.py
+- Keeps Streamlit UI and behavior identical, with safer normalization for AI outputs
 """
 import os
 import json
@@ -28,14 +24,19 @@ BACKEND_URL = os.environ.get("BACKEND_URL")
 CANDIDATES = []
 if BACKEND_URL:
     CANDIDATES.append(BACKEND_URL.rstrip("/"))
-CANDIDATES += ["http://127.0.0.1:8080", "http://localhost:8080", "http://127.0.0.1:8000", "http://localhost:8000"]
+CANDIDATES += [
+    "http://127.0.0.1:8080",
+    "http://localhost:8080",
+    "http://127.0.0.1:8000",
+    "http://localhost:8000",
+]
 API_BASE_CANDIDATES = []
 for c in CANDIDATES:
     if c and c not in API_BASE_CANDIDATES:
         API_BASE_CANDIDATES.append(c)
 
-RECO_ENDPOINTS = ["{base}/reco/generate", "{base}/api/reco/generate"]
-CHAT_ENDPOINTS = ["{base}/reco/chat", "{base}/api/reco/chat"]
+RECO_ENDPOINTS = ["{base}/reco/generate"]
+CHAT_ENDPOINTS = ["{base}/reco/chat"]
 
 # Prefer local import (fast path) if backend code is available in same venv/project
 LOCAL_BACKEND_AVAILABLE = False
@@ -56,10 +57,13 @@ def call_reco_backend(payload, timeout=6):
     if LOCAL_BACKEND_AVAILABLE and _local_generate_tips:
         try:
             tips = _local_generate_tips(payload)
+            # Normalize local return shapes
             if isinstance(tips, list):
-                return {"success": True, "recommendations": tips, "source": "local"}
+                return {"success": True, "recommendations": tips, "source": "local (groq)"}
             if isinstance(tips, dict) and "tips" in tips:
-                return {"success": True, "recommendations": tips["tips"], "source": "local"}
+                return {"success": True, "recommendations": tips["tips"], "source": "local (groq)"}
+            if isinstance(tips, dict) and "recommendations" in tips:
+                return {"success": True, "recommendations": tips["recommendations"], "source": "local (groq)"}
         except Exception:
             pass
 
@@ -96,7 +100,7 @@ def call_chat_backend(payload, timeout=8):
                 text = resp.get("response") or resp.get("reply") or str(resp)
             else:
                 text = str(resp)
-            return {"success": True, "response": text, "source": "local"}
+            return {"success": True, "response": text, "source": "local (groq)"}
         except Exception:
             pass
 
@@ -119,10 +123,43 @@ def call_chat_backend(payload, timeout=8):
 
 
 # -----------------------
+# Small helper to compute totals from a custom profile dictionary
+# Mirrors the calculation approach used in Analyzer (lightweight)
+# -----------------------
+def compute_totals_from_custom(form_values: dict):
+    # emission factors (same as analyzer)
+    ELECTRICITY_FACTOR = 0.82  # kg CO₂ per kWh
+    NATURAL_GAS_FACTOR = 5.3   # kg CO₂ per therm
+    CAR_FACTOR = 0.21          # kg CO₂ per km
+    BUS_FACTOR = 0.09          # kg CO₂ per km
+
+    electricity_emissions = form_values.get("electricityKwh", 0) * ELECTRICITY_FACTOR
+    natural_gas_emissions = form_values.get("naturalGasTherms", 0) * NATURAL_GAS_FACTOR
+    car_emissions = form_values.get("carKm", 0) * CAR_FACTOR
+    bus_emissions = form_values.get("busKm", 0) * BUS_FACTOR
+    # If user provided daily 'foodEmissions' (kg/day), convert to monthly
+    food_value = form_values.get("foodEmissions", 0)
+    food_emissions = food_value * 30 if food_value and food_value < 1000 else form_values.get("foodEmissions", 0)
+    goods_emissions = form_values.get("goodsEmissions", 0)
+
+    total = round(electricity_emissions + natural_gas_emissions + car_emissions + bus_emissions + food_emissions + goods_emissions, 1)
+
+    return {
+        "total": total,
+        "energy": round(electricity_emissions + natural_gas_emissions, 1),
+        "travel": round(car_emissions + bus_emissions, 1),
+        "food": round(food_emissions, 1),
+        "goods": round(goods_emissions, 1),
+    }
+
+
+# -----------------------
 # UI Styling (match Analyzer)
 # -----------------------
 st.set_page_config(page_title="AI Recommendations - CarbonLens", page_icon="🤖", layout="wide")
-st.markdown("""
+
+st.markdown(
+    """
 <style>
 :root{
   --bg: #0f172a;
@@ -137,7 +174,6 @@ body, html, .main, .block-container {
   color: #e6eef6;
   font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
 }
-
 
 /* header row */
 .reco-top { display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
@@ -167,11 +203,14 @@ body, html, .main, .block-container {
 .row { display:flex; gap:12px; align-items:center; }
 .right { margin-left:auto; }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 # -----------------------
 # Page Header (Matches Analyzer Style)
 # -----------------------
-st.markdown("""
+st.markdown(
+    """
 <style>
 .ai-header {
     text-align: center;
@@ -199,7 +238,9 @@ st.markdown("""
     <div class="ai-title">♻️ AI Recommendations</div>
     <div class="ai-subtitle">Personalized, prioritized recommendations — based on your Analyzer results.</div>
 </div>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 # -----------------------
 # Load Analyzer result
@@ -220,10 +261,21 @@ else:
     breakdown = {}
     trend = []
 
+# If using a custom profile and totals are missing or small, compute from custom_profile_processed
+selected_profile = st.session_state.get("selected_profile")
+if selected_profile == "Custom":
+    custom_data = st.session_state.get("custom_profile_processed") or st.session_state.get("custom_profile_data") or {}
+    # if totals incomplete or zero, use computed totals
+    if not isinstance(totals, dict) or totals.get("total", 0) <= 0:
+        computed = compute_totals_from_custom(custom_data)
+        totals = computed
+        # score may not exist; keep existing score if any
+        score = score or None
+
 # determine highest category
 candidate_keys = [k for k in ("energy", "travel", "food", "goods") if k in totals]
 highest_category = max(candidate_keys, key=lambda k: totals.get(k, 0)) if candidate_keys else None
-profile = st.session_state.get("selected_profile") or st.session_state.get("demo_data") and st.session_state.get("selected_profile") or "Your Profile"
+profile = st.session_state.get("selected_profile") or (st.session_state.get("demo_data") and st.session_state.get("selected_profile")) or "Your Profile"
 
 # top metrics row (avoid repeating multiple times)
 c1, c2, c3, c4 = st.columns(4)
@@ -274,9 +326,13 @@ def fallback_recs(totals, highest_category, profile):
     return recs
 
 if "ai_recommendations" not in st.session_state:
+    # Build a safe payload that always contains totals (normalized)
     payload = {
-        **(breakdown if isinstance(breakdown, dict) else {}),
-        **(totals if isinstance(totals, dict) else {}),
+        "total": totals.get("total", 0),
+        "energy": totals.get("energy", 0),
+        "travel": totals.get("travel", 0),
+        "food": totals.get("food", 0),
+        "goods": totals.get("goods", 0),
         "score": score,
         "profile": profile
     }
@@ -284,15 +340,28 @@ if "ai_recommendations" not in st.session_state:
     if resp.get("success"):
         raw = resp.get("recommendations") or []
         normalized = []
+        # If backend returned dict with tips key, try to normalize
+        if isinstance(raw, dict) and "tips" in raw:
+            raw = raw["tips"]
+        if isinstance(raw, dict) and "recommendations" in raw:
+            raw = raw["recommendations"]
         for i, item in enumerate(raw):
             if not isinstance(item, dict):
                 continue
             rec_id = item.get("id") or f"rec_{i}_{random.randint(0,9999)}"
             title = item.get("title") or item.get("text") or item.get("area") or f"Recommendation {i+1}"
             text = item.get("text") or item.get("description") or ""
+            # backend might return float or str for impact
             impact = item.get("impact_kg_month") or item.get("potential_savings") or item.get("impact") or 0
-            confidence = float(item.get("confidence", 0.75))
-            steps = item.get("steps") if isinstance(item.get("steps"), list) else []
+            try:
+                impact = int(float(impact))
+            except Exception:
+                impact = 0
+            try:
+                confidence = float(item.get("confidence", 0.75))
+            except Exception:
+                confidence = 0.75
+            steps = item.get("steps", []) if isinstance(item.get("steps"), list) else []
             category = item.get("category") or item.get("area") or "General"
             # ensure steps: fill default if empty
             if not steps:
@@ -325,7 +394,7 @@ if "ai_recommendations" not in st.session_state:
                 "id": rec_id,
                 "title": title,
                 "text": text,
-                "impact_kg_month": int(impact),
+                "impact_kg_month": impact,
                 "confidence": confidence,
                 "steps": steps,
                 "category": category
@@ -423,61 +492,157 @@ st.markdown("</div>", unsafe_allow_html=True)  # close grid
 st.markdown("---")
 
 # -----------------------
-# Chat assistant
+# Chat assistant (UPGRADED UI)
 # -----------------------
-st.markdown("### 💬 Carbon Reduction Assistant")
+st.markdown("""
+<style>
+
+.chat-container {
+    max-height: 420px;
+    overflow-y: auto;
+    padding: 18px;
+    border-radius: 16px;
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.04);
+    margin-bottom: 12px;
+}
+
+/* box that contains the heading and chat area */
+.chat-box {
+    border-radius: 20px;
+    padding: 18px 22px;
+    background: linear-gradient(145deg, #0f1624, #0b1120);
+    border: 1px solid rgba(255,255,255,0.08);
+    box-shadow: 0 0 35px rgba(80,120,255,0.28),
+                inset 0 0 12px rgba(255,255,255,0.03);
+    margin-bottom: 18px;
+}
+
+.chat-heading {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 20px;
+    font-weight: 800;
+    color: #ffffff;
+}
+
+
+.chat-box:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 10px 30px rgba(108,99,255,0.20), 
+                0 4px 15px rgba(0,212,170,0.12);
+}
+
+
+
+/* user bubble */
+.chat-user {
+    background: linear-gradient(90deg, #4f46e5cc, #7c3aedcc);
+    padding: 10px 14px;
+    border-radius: 14px;
+    margin: 6px 0;
+    color: white;
+    width: fit-content;
+    max-width: 80%;
+    margin-left: auto;
+    box-shadow: 0 0 10px #5b4bff55;
+    font-size: 15px;
+}
+
+/* assistant bubble */
+.chat-assistant {
+    background: rgba(255,255,255,0.06);
+    padding: 10px 14px;
+    border-radius: 14px;
+    margin: 6px 0;
+    width: fit-content;
+    max-width: 80%;
+    margin-right: auto;
+    color: #e2e8f0;
+    border: 1px solid rgba(255,255,255,0.06);
+    box-shadow: 0 0 8px #00000030;
+    font-size: 15px;
+}
+
+/* Chat input alignment */
+.chat-input-box {
+    margin-top: 12px;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<div class="chat-box">
+    <div class="chat-heading">💬 Carbon Reduction Assistant</div>
+</div>
+""", unsafe_allow_html=True)
+
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-# sanitize chat_history
-st.session_state.chat_history = [m for m in st.session_state.chat_history if isinstance(m, dict) and "role" in m and "content" in m]
 
+for m in st.session_state.chat_history:
+    if m["role"] == "user":
+        st.markdown(f"<div class='chat-user'>{html.escape(m['content'])}</div>", unsafe_allow_html=True)
+    else:
+        st.markdown(f"<div class='chat-assistant'>{html.escape(m['content'])}</div>", unsafe_allow_html=True)
+
+st.markdown("</div>", unsafe_allow_html=True)  # close chat-container
+
+# Chat input
 with st.form("chat_form", clear_on_submit=True):
-    user_input = st.text_input("Ask about your recommendations or highest-impact actions", "")
+    user_input = st.text_input(
+        "Ask something about your footprint or recommendations:",
+        "",
+        key="chat_input",
+        placeholder="e.g., How can I reduce my energy footprint?"
+    )
     send = st.form_submit_button("Send")
 
 if send and user_input.strip():
     st.session_state.chat_history.append({"role": "user", "content": user_input.strip()})
+
+    # Ensure totals payload always present and accurate for custom profiles
+    payload_totals = {
+        "total": totals.get("total", 0),
+        "energy": totals.get("energy", 0),
+        "travel": totals.get("travel", 0),
+        "food": totals.get("food", 0),
+        "goods": totals.get("goods", 0),
+    }
+
     chat_payload = {
         "user_question": user_input.strip(),
-        "energy_kg": totals.get("energy", 0),
-        "travel_kg": totals.get("travel", 0),
-        "food_kg": totals.get("food", 0),
-        "goods_kg": totals.get("goods", 0),
-        "totals": totals,
+        "totals": payload_totals,
+        "profile": profile,
         "breakdown": breakdown,
         "score": score,
-        "profile": profile,
-        "chat_history": st.session_state.chat_history
+        "chat_history": st.session_state.chat_history,
     }
+
     chat_resp = call_chat_backend(chat_payload)
     if chat_resp.get("success"):
         assistant_text = chat_resp.get("response") or "No response returned by AI backend."
     else:
+        # If AI fails, give a helpful fallback using computed totals if available
         assistant_text = (
-            f"I can't reach the AI backend. Based on your Analyzer, prioritize reducing "
+            f"I couldn't reach the AI backend right now. Based on your Analyzer, start with reducing "
             f"{(highest_category or 'your main source')}. Example: {reco_list[0]['title'] if reco_list else 'Start with a home energy audit.'}"
         )
+
     st.session_state.chat_history.append({"role": "assistant", "content": assistant_text})
-    # rerun to reflect chat and any UI changes (st.rerun is available in current Streamlit)
-    try:
-        st.rerun()
-    except Exception:
-        pass
 
-# show chat history
-for m in st.session_state.chat_history:
-    if m["role"] == "user":
-        st.markdown(f"**You:** {m['content']}")
-    else:
-        st.markdown(f"**Assistant:** {m['content']}")
+    st.rerun()
 
-# -----------------------
-# Quick controls
-# -----------------------
+# close the chat-box container
+st.markdown("</div>", unsafe_allow_html=True)
+
+# Buttons
 cols = st.columns(3)
 with cols[0]:
-    if st.button("Refresh AI recommendations"):
+    if st.button("Refresh AI Recommendations"):
         st.session_state.pop("ai_recommendations", None)
         st.rerun()
 with cols[1]:
@@ -485,4 +650,4 @@ with cols[1]:
         st.session_state.chat_history = []
         st.rerun()
 with cols[2]:
-    st.markdown(f"Backend: {API_BASE_CANDIDATES[0] if API_BASE_CANDIDATES else 'auto (127.0.0.1)'}")
+    st.markdown("Model: llama-3.1-8b-instant (Groq)")

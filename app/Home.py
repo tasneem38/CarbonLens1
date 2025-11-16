@@ -221,7 +221,7 @@ st.markdown("""
         <p class="tagline">Track. Reduce. Inspire. 🚀</p>
         <p class="subtitle">
             A dynamic way to understand your carbon footprint — powered by AI recommendations, 
-            beautiful dashboards, and actionable simulations. 💡
+            and actionable simulations. 💡
         </p>
     </div>
 </div>

@@ -4,12 +4,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.db.session import engine
 from backend.db import models
 
-# ⭐ ADD THESE TWO IMPORTS
-from backend.api import routes_leaderboard
 from backend.api import routes_footprint
 
+from backend.api import routes_reco 
 app = FastAPI(title="CarbonLens API")
 
+app.include_router(routes_footprint.router)
+
+app.include_router(routes_reco.router) 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,9 +20,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ⭐ REGISTER BOTH ROUTERS (NO PREFIX)
-app.include_router(routes_footprint.router)
-app.include_router(routes_leaderboard.router)
 
 @app.on_event("startup")
 def on_startup():

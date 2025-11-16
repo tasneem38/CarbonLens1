@@ -13,15 +13,13 @@ import random
 # ✅ You must define the router right after import
 router = APIRouter(prefix="/footprint", tags=["Footprint"])
 
-
 @router.post("/compute", response_model=FootprintResult)
 def compute_footprint(payload: LifestyleInput, db: Session = Depends(get_db)):
     totals = compute_totals(payload.model_dump())
     score = score_from_total(totals["total"])
     trend = forecast_series(totals["total"])
 
-# backend/api/routes_footprint.py
-
+    # Save run for leaderboard
     run = models.FootprintRun(
         user_id=None,
         inputs=payload.model_dump(),
@@ -29,18 +27,24 @@ def compute_footprint(payload: LifestyleInput, db: Session = Depends(get_db)):
         energy_kg=totals["energy"],
         travel_kg=totals["travel"],
         food_kg=totals["food"],
-        goods_kg=totals.get("goods", 0),   # ← FIXED
+        goods_kg=totals.get("goods", 0),
         score=score
     )
     db.add(run)
 
-    # Leaderboard entry
+    # Save leaderboard entry
     anon_id = random.randint(1000, 9999)
     entry = Leaderboard(
-        user_id=None,                     # ← FIXED
         user_name=f"Anonymous #{anon_id}",
         score=score
     )
     db.add(entry)
 
     db.commit()
+
+    # ✅ MUST RETURN FOOTPRINT DATA (otherwise leaderboard breaks)
+    return {
+        "totals": totals,
+        "score": score,
+        "trend": trend
+    }
